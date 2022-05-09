@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Boids by JavaScript</title>
+  </head>
+  <body>
+    <h1>Boids by JavaScript</h1>
+    <canvas id="canvas"></canvas>
+    <div id="performance"></div>
+    <script>
+      class Vector {
+        constructor(x, y) {
+          this.x = x;
+          this.y = y;
+        }
+
+        static sub(v0, v1) {
+          return new Vector(v0.x - v1.x, v0.y - v1.y);
+        }
+
+        static distance(v0, v1) {
+          const s = Vector.sub(v0, v1);
+          return s.length();
+        }
+
+        normalize() {
+          return this.div(this.length());
+        }
+
+        add(v) {
+          this.x += v.x;
+          this.y += v.y;
+          return this;
+        }
+
+        sub(v) {
+          this.x -= v.x;
+          this.y -= v.y;
+          return this;
+        }
+
+        mul(s) {
+          this.x *= s;
+          this.y *= s;
+          return this;
+        }
+
+        div(s) {
+          return this.mul(1.0 / s);
+        }
+
+        length() {
+          return Math.sqrt(this.sqLength());
+        }
+
+        sqLength() {
+          return this.x * this.x + this.y * this.y;
+        }
+
+        limit(s) {
+          const length = this.length();
+          if (length > s) {
+            this.normalize().mul(s);
+          }
+          return this;
+        }
+
+        rotate(angle) {
+          const c = Math.cos(angle);
+          const s = Math.sin(angle);
+          [this.x, this.y] = [c * this.x - s * this.y, s * this.x + c * this.y];
+          return this;
+        }
+      }
+
+      class Boids {
+        constructor(width, height, num) {
+          this.width = width;
+          this.height = height;
+          this.num = num;
+
+          this.radius = 2.0;
+          this.maxSpeed = 2.0;
+          this.maxForce = 0.03;
+
+          this.separationDistance = 25.0;
+          this.alignDistance = 50.0;
+          this.cohesionDistance = 50.0;
+
+          this.separationIntensity = 1.5;
+          this.alignIntensity = 1.0;
+          this.cohesionIntensity = 1.0;
+
+          // position X, position Y, velocity X, velocity Y, acceleration X, acceleration Y
+          this._array = new Float64Array(num * 6);
+          this._initialize();
+        }
+
+        _initialize() {
+          for (let i = 0; i < this.num; ++i) {
+            const pos = new Vector(Math.random() * this.width, Math.random() * this.height);
+            const angle = 2.0 * Math.PI * Math.random();
+            const vel = new Vector(Math.cos(angle), Math.sin(angle));
+            this._setPos(i, pos);
+            this._setVel(i, vel);
+          }
+        }
+
+        getPos(index) {
+          const address = index * 6;
+          return new Vector(this._array[address], this._array[address + 1]);
+        }
+
+        _setPos(index, pos) {
+          const address = index * 6;
+          this._array[address] = pos.x;
+          this._array[address + 1] = pos.y;
+        }
+
+        getVel(index) {
+          const address = index * 6;
+          return new Vector(this._array[address + 2], this._array[address + 3]);
+        }
+
+        _setVel(index, vel) {
+          const address = index * 6;
+          this._array[address + 2] = vel.x;
+          this._array[address + 3] = vel.y;
+        }
+
+        _getAcc(index) {
+          const address = index * 6;
+          return new Vector(this._array[address + 4], this._array[address + 5]);
+        }
+
+        _setAcc(index, acc) {
+          const address = index * 6;
+          this._array[address + 4] = acc.x;
+          this._array[address + 5] = acc.y;
+        }
+
+        update() {
+          for (let i = 0; i < this.num; ++i) {
+            const acc = new Vector(0, 0);
+
+            const sep = this._separate(i);
+            const ali = this._align(i);
+            const coh = this._cohesion(i);
+
+            sep.mul(this.separationIntensity);
+            ali.mul(this.alignIntensity);
+            coh.mul(this.cohesionIntensity);
+
+            acc.add(sep);
+            acc.add(ali);
+            acc.add(coh);
+
+            this._setAcc(i, acc);
+          }
+
+          for (let i = 0; i < this.num; ++i) {
+            const pos = this.getPos(i);
+            const vel = this.getVel(i);
+            const acc = this._getAcc(i);
+
+            vel.add(acc).limit(this.maxSpeed);
+            pos.add(vel);
+
+            if (pos.x < -this.radius) {
+              pos.x = this.width + this.radius;
+            }
+            if (pos.x > this.width + this.radius) {
+              pos.x = -this.radius;
+            }
+            if (pos.y < -this.radius) {
+              pos.y = this.height + this.radius;
+            }
+            if (pos.y > this.height + this.radius) {
+              pos.y = -this.radius;
+            }
+
+            this._setPos(i, pos);
+            this._setVel(i, vel);
+          }
+
+        }
+
+        _separate(index) {
+          const pos = this.getPos(index);
+          const steer = new Vector(0, 0);
+          let count = 0;
+          for (let i = 0; i < this.num; ++i) {
+            const otherPos = this.getPos(i);
+            const d = Vector.distance(pos, otherPos);
+            if (d > 0 && d < this.separationDistance) {
+              const diff = Vector.sub(pos, otherPos).normalize().div(d);
+              steer.add(diff);
+              ++count;
+            }
+          }
+
+          if (count > 0 && steer.sqLength() > 0) {
+            steer.normalize().mul(this.maxSpeed);
+            const vel = this.getVel(index);
+            steer.sub(vel);
+            steer.limit(this.maxForce);
+          }
+          return steer;
+        }
+
+        _align(index) {
+          const pos = this.getPos(index);
+          const sumVel = new Vector(0, 0);
+          let count = 0;
+          for (let i = 0; i < this.num; ++i) {
+            const otherPos = this.getPos(i);
+            const d = Vector.distance(pos, otherPos);
+            if (d > 0 && d < this.alignDistance) {
+              const otherVel = this.getVel(i);
+              sumVel.add(otherVel);
+              ++count;
+            }
+          }
+
+          if (count > 0) {
+            sumVel.normalize().mul(this.maxSpeed);
+            const vel = this.getVel(index);
+            return Vector.sub(sumVel, vel).limit(this.maxForce);
+          }
+          return new Vector(0, 0);
+        }
+
+        _cohesion(index) {
+          const pos = this.getPos(index);
+          const sumPos = new Vector(0, 0);
+          let count = 0;
+          for (let i = 0; i < this.num; ++i) {
+            const otherPos = this.getPos(i);
+            const d = Vector.distance(pos, otherPos);
+            if (d > 0 && d < this.cohesionDistance) {
+              sumPos.add(otherPos);
+              ++count;
+            }
+          }
+
+          if (count > 0) {
+            sumPos.div(count);
+            const desiredVel = Vector.sub(sumPos, pos)
+              .normalize().mul(this.maxSpeed);
+            const vel = this.getVel(index);
+            const steer = Vector.sub(desiredVel, vel).limit(this.maxForce);
+            return steer;
+          }
+          return new Vector(0, 0);
+        }
+      }
+
+      const width = 512;
+      const height = 512;
+
+      const canvas = document.getElementById('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+
+      const boids = new Boids(width, height, 200);
+
+      const render = () => {
+        context.fillStyle = 'rgb(50, 50, 50)'
+        context.fillRect(0, 0, width, height);
+
+        context.strokeStyle = 'rgb(255, 255, 255)';
+        for (let i = 0; i < boids.num; ++i) {
+          const pos = boids.getPos(i);
+          const vel = boids.getVel(i);
+
+          const angle = Math.atan2(vel.y, vel.x) + Math.PI * 0.5;
+          const v0 = new Vector(0, -boids.radius * 2).rotate(angle).add(pos);
+          const v1 = new Vector(-boids.radius, boids.radius * 2).rotate(angle).add(pos);
+          const v2 = new Vector(boids.radius, boids.radius * 2).rotate(angle).add(pos);
+
+          context.beginPath();
+          context.moveTo(v0.x, v0.y);
+          context.lineTo(v1.x, v1.y);
+          context.lineTo(v2.x, v2.y);
+          context.closePath();
+          context.stroke();
+        }
+      };
+
+      const divPerformance = document.getElementById('performance');
+
+      let count = 0;
+      const loop = () => {
+        requestAnimationFrame(loop);
+        const startTime = performance.now();
+        boids.update();
+        const endTime = performance.now();
+        const elapsedTime = endTime - startTime;
+        if (count % 5 == 0) {
+          divPerformance.innerText = `Time(ms):${elapsedTime}`;
+        }
+        ++count;
+        count %= 5;
+        render();
+      };
+      loop();
+
+    </script>
+  </body>
+</html>

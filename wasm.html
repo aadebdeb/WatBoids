@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Boids by WAT(WebAssembly Text Format)</title>
+  </head>
+  <body>
+    <h1>Boids by WAT(WebAssembly Text Format)</h1>
+    <canvas id="canvas"></canvas>
+    <div id="performance"></div>
+    <script>
+
+      class Vector {
+        constructor(x, y) {
+          this.x = x;
+          this.y = y;
+        }
+
+        add(v) {
+          this.x += v.x;
+          this.y += v.y;
+          return this;
+        }
+
+        rotate(angle) {
+          const c = Math.cos(angle);
+          const s = Math.sin(angle);
+          [this.x, this.y] = [c * this.x - s * this.y, s * this.x + c * this.y];
+          return this;
+        }
+      }
+
+      class BoidsWasm {
+        constructor(width, height, num) {
+          this.width = width;
+          this.height = height;
+          this.num = num;
+
+          this.radius = 2.0;
+          this.maxSpeed = 2.0;
+          this.maxForce = 0.03;
+
+          this.separationDistance = 25.0;
+          this.alignDistance = 50.0;
+          this.cohesionDistance = 50.0;
+
+          this.separationIntensity = 1.5;
+          this.alignIntensity = 1.0;
+          this.cohesionIntensity = 1.0;
+
+          this._memory = new WebAssembly.Memory({ initial: 80 });
+          this._array = new Float64Array(this._memory.buffer, 0, this.num * 6);
+          this._initialize();
+          this._wasm = null;
+        }
+
+        _initialize() {
+          for (let i = 0; i < this.num; ++i) {
+            const pos = new Vector(Math.random() * this.width, Math.random() * this.height);
+            const angle = 2.0 * Math.PI * Math.random();
+            const vel = new Vector(Math.cos(angle), Math.sin(angle));
+
+            this._setPos(i, pos);
+            this._setVel(i, vel);
+          }
+        }
+
+        async prepare() {
+          const importObject = {
+            env: {
+              memory: this._memory,
+              width: this.width,
+              height: this.height,
+              num: this.num,
+              radius: this.radius,
+              maxSpeed: this.maxSpeed,
+              maxForce: this.maxForce,
+              separationDistance: this.separationDistance,
+              alignDistance: this.alignDistance,
+              cohesionDistance: this.cohesionDistance,
+              separationIntensity: this.separationIntensity,
+              alignIntensity: this.alignIntensity,
+              cohesionIntensity: this.cohesionIntensity
+            },
+          };
+          this._wasm = await WebAssembly.instantiateStreaming(fetch('./boids.wasm'), importObject);
+        }
+
+        getPos(index) {
+          const address = index * 6;
+          return new Vector(this._array[address], this._array[address + 1]);
+        }
+
+        _setPos(index, pos) {
+          const address = index * 6;
+          this._array[address] = pos.x;
+          this._array[address + 1] = pos.y;
+        }
+
+        getVel(index) {
+          const address = index * 6;
+          return new Vector(this._array[address + 2], this._array[address + 3]);
+        }
+
+        _setVel(index, vel) {
+          const address = index * 6;
+          this._array[address + 2] = vel.x;
+          this._array[address + 3] = vel.y;
+        }
+
+        update() {
+          if (!this._wasm) {
+            console.warn('BoidsWasm#prepare must be called before BoidsWasm#update.');
+          }
+          this._wasm.instance.exports.update();
+        }
+      }
+
+      const width = 512;
+      const height = 512;
+
+      const canvas = document.getElementById('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+
+      const boids = new BoidsWasm(width, height, 200);
+
+      (async () => {
+        await boids.prepare();
+
+        const render = () => {
+          context.fillStyle = 'rgb(50, 50, 50)'
+          context.fillRect(0, 0, width, height);
+
+          context.strokeStyle = 'rgb(255, 255, 255)';
+          for (let i = 0; i < boids.num; ++i) {
+            const pos = boids.getPos(i);
+            const vel = boids.getVel(i);
+
+            const angle = Math.atan2(vel.y, vel.x) + Math.PI * 0.5;
+            const v0 = new Vector(0, -boids.radius * 2).rotate(angle).add(pos);
+            const v1 = new Vector(-boids.radius, boids.radius * 2).rotate(angle).add(pos);
+            const v2 = new Vector(boids.radius, boids.radius * 2).rotate(angle).add(pos);
+
+            context.beginPath();
+            context.moveTo(v0.x, v0.y);
+            context.lineTo(v1.x, v1.y);
+            context.lineTo(v2.x, v2.y);
+            context.closePath();
+            context.stroke();
+          }
+        };
+
+        const divPerformance = document.getElementById('performance');
+
+        let count = 0;
+        const loop = () => {
+          requestAnimationFrame(loop);
+          const startTime = performance.now();
+          boids.update();
+          const endTime = performance.now();
+          const elapsedTime = endTime - startTime;
+          if (count % 5 == 0) {
+            divPerformance.innerText = `Time(ms):${elapsedTime}`;
+          }
+          ++count;
+          count %= 5;
+          render();
+        };
+        loop();
+
+      })();
+
+    </script>
+  </body>
+</html>
